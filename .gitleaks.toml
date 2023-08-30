@@ -1,0 +1,8 @@
+[allowlist]
+  description = "Global Allowlist"
+
+  paths = [
+    # Ignore all external vendored code
+    '''collections\/*''',
+    '''roles\/*'''
+  ]

@@ -1,0 +1,44 @@
+name = "custom-configs"
+description = "Custom configs for RHEL 9"
+version = "0.0.1"
+distro = "rhel-9"
+
+[customizations]
+hostname = "custom-configs"
+
+# Configure SSHD to listen on port 2222
+[[customizations.files]]
+path = "/etc/ssh/sshd_config.d/10-sshd-port.conf"
+mode = "0600"
+data = """
+Port 2222
+"""
+
+# Create a fisrt-boot service to allow sshd to run on port 2222
+[[customizations.files]]
+path = "/etc/systemd/system/custom-first-boot.service"
+data = """
+[Unit]
+Description=Allow sshd to run on port 2222 (on first boot)
+ConditionPathExists=/etc/custom-first-boot
+
+Before=sshd.service
+
+[Service]
+Type=oneshot
+
+# As the first thing, ensure that the service will not run again
+ExecStart=/usr/bin/rm /etc/custom-first-boot
+ExecStart=/usr/sbin/semanage port -a -p tcp -t ssh_port_t 2222
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+# Touch a file, which will ensure that the custom first boot service will run if enabled
+[[customizations.files]]
+path = "/etc/custom-first-boot"
+
+# Enable the custom service
+[customizations.services]
+enabled = ["custom-first-boot"]

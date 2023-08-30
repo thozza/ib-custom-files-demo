@@ -1,0 +1,46 @@
+name = "custom-service"
+description = "Custom service for RHEL 9"
+version = "0.0.1"
+distro = "rhel-9"
+
+[customizations]
+hostname = "custom-service"
+
+# Create a custom service unit, which would fail on startup (ExecStart=/usr/bin/false)
+[[customizations.files]]
+path = "/etc/systemd/system/custom.service"
+data = """
+[Unit]
+Description=Custom service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/false
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+# Create a custom file, which would be read by the custom service
+[[customizations.files]]
+path = "/etc/custom_file.txt"
+data = "image builder is the best\n"
+
+# Create a drop-in configuration directory for the custom service
+[[customizations.directories]]
+path = "/etc/systemd/system/custom.service.d"
+
+# Create a drop-in configuration file for the custom service, which will override the ExecStart directive
+# and it will print the content of /etc/custom_file.txt into syslog.
+[[customizations.files]]
+path = "/etc/systemd/system/custom.service.d/override.conf"
+data = """
+[Service]
+ExecStart=
+ExecStart=/usr/bin/cat /etc/custom_file.txt
+"""
+
+# Enable the custom service
+[customizations.services]
+enabled = ["custom.service"]

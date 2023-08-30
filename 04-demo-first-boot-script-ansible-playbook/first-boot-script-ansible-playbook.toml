@@ -1,0 +1,81 @@
+name = "first-boot-script-ansible-playbook"
+description = "Custom RHEL 9 image with ansible-playbook service on first boot"
+version = "0.0.1"
+distro = "rhel-9"
+
+# Installing ansible-core to be able to run ansible-playbook
+# Installing dnf-automatic here, since the image is not subscribed and thus the
+# Ansible role would not be able to install it.
+packages = [
+  { name = "ansible-core" },
+  { name = "dnf-automatic" }
+]
+
+[customizations]
+hostname = "first-boot-script-ansible-playbook"
+
+# Create a script, which will be executed on the first boot of the instance
+[[customizations.files]]
+path = "/root/first-boot-script.sh"
+mode = "0755"
+data = """
+# This script will be executed on the first boot of the instance
+#!/bin/bash
+
+set -x
+
+if [ $# -ne 3 ]; then
+    echo "Usage: $0 <repo_url> <branch> <playbook>"
+    exit 1
+fi
+
+REPO_URL=$1
+BRANCH=$2
+PLAYBOOK=$3
+
+TMP_DIR=$(mktemp -d)
+trap "rm -rf $TMP_DIR" EXIT
+
+git clone --branch "$BRANCH" "$REPO_URL" "$TMP_DIR"
+cd "$TMP_DIR" || exit 1
+
+if [ -f roles/requirements.yml ]; then
+  ansible-galaxy role install -r roles/requirements.yml -p roles
+fi
+
+if [ -f collections/requirements.yml ]; then
+  ansible-galaxy collection install -r collections/requirements.yml -p collections
+fi
+
+ansible-playbook -c local -i localhost, "$PLAYBOOK"
+"""
+
+# Create a custom service unit, which will execute the script on the first boot
+[[customizations.files]]
+path = "/etc/systemd/system/custom-first-boot.service"
+data = """
+[Unit]
+Description=Run ansible-playbook on first boot
+ConditionPathExists=/etc/custom-first-boot
+
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+
+# As the first thing, ensure that the service will not run again
+ExecStart=/usr/bin/rm /etc/custom-first-boot
+ExecStart=/bin/sh -c '/usr/bin/bash /root/first-boot-script.sh https://github.com/thozza/ib-custom-files-demo.git ansible-play demo.yml | tee /var/log/first-boot-script.log'
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+# Touch a file, which will ensure that the custom first boot service will run if enabled
+[[customizations.files]]
+path = "/etc/custom-first-boot"
+
+# Enable the custom first boot service
+[customizations.services]
+enabled = ["custom-first-boot"]

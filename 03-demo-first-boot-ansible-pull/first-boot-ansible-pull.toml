@@ -1,0 +1,45 @@
+name = "first-boot-ansible-pull"
+description = "Custom RHEL 9 image with ansible-pull service on first boot"
+version = "0.0.1"
+distro = "rhel-9"
+
+# Installing ansible-core to be able to run ansible-playbook
+# Installing dnf-automatic here, since the image is not subscribed and thus the
+# Ansible role would not be able to install it.
+packages = [
+  { name = "ansible-core" },
+  { name = "dnf-automatic" }
+]
+
+[customizations]
+hostname = "first-boot-ansible-pull"
+
+# Create a custom service unit, which will run ansible-pull on first boot
+[[customizations.files]]
+path = "/etc/systemd/system/custom-first-boot.service"
+data = """
+[Unit]
+Description=Run ansible-pull on first boot
+ConditionPathExists=/etc/custom-first-boot
+
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+
+# As the first thing, ensure that the service will not run again
+ExecStart=/usr/bin/rm /etc/custom-first-boot
+ExecStart=/usr/bin/ansible-pull -i localhost, -U https://github.com/thozza/ib-custom-files-demo.git -C ansible-play-with-deps demo.yml
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+# Touch a file, which will ensure that the custom first boot service will run if enabled
+[[customizations.files]]
+path = "/etc/custom-first-boot"
+
+# Enable the custom service
+[customizations.services]
+enabled = ["custom-first-boot"]

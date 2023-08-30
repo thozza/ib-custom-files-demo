@@ -1,0 +1,224 @@
+#!/usr/bin/env python3
+
+# This script starts an ephemeral virtual machine in qemu, injecting
+# configuration via cloud-init.
+#
+# Inspired by:
+# https://github.com/osbuild/osbuild-composer/blob/main/tools/test-case-generators/generate-all-test-cases
+
+import argparse
+import logging
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+
+import yaml
+
+# setup logging
+log = logging.getLogger(__file__)
+log.setLevel(logging.INFO)
+formatter = logging.Formatter("%(asctime)s [%(levelname)s]: %(message)s")
+sh = logging.StreamHandler()
+sh.setFormatter(formatter)
+log.addHandler(sh)
+
+
+def create_default_ci_userdata(workdir, user, password, ssh_key_file=None):
+    """
+    Creates the default 'user-data.yml' file for cloud-init inside the
+    'workdir'. If ssh_key_file is provided, the ssh key is added to the
+    'user-data.yml' file.
+
+    The path of the created file is returned.
+    """
+    default_ci_userdata_path = f"{workdir}/user-data.yml"
+
+    ci_user_data_dict = {
+        "user": user,
+        "password": password,
+        "ssh_pwauth": True,
+        "chpasswd": {"expire": False},
+        "sudo": "ALL=(ALL) NOPASSWD:ALL"
+    }
+
+    if ssh_key_file:
+        with open(ssh_key_file, encoding="utf-8") as f:
+            ci_user_data_dict["ssh_authorized_keys"] = [f.read().strip()]
+
+    with open(default_ci_userdata_path, "w") as f:
+        f.write("#cloud-config\n")
+        yaml.safe_dump(ci_user_data_dict, f)
+
+    return default_ci_userdata_path
+
+
+def prepare_cloud_init_cdrom(workdir, userdata):
+    """
+    Generates a CDROM ISO used as a data source for cloud-init.
+
+    Returns path to the generated CDROM ISO image.
+    """
+    iso_path = os.path.join(workdir, "cloudinit.iso")
+    cidatadir = os.path.join(workdir, "cidata")
+    user_data_path = os.path.join(cidatadir, "user-data")
+    meta_data_path = os.path.join(cidatadir, "meta-data")
+
+    os.mkdir(cidatadir)
+
+    if os.path.isdir(userdata):
+        raise NotImplementedError("Directory userdata is not supported")
+    else:
+        shutil.copy(userdata, user_data_path)
+
+    with open(meta_data_path, "w") as f:
+        f.write("instance-id: nocloud\n")
+
+    sysname = os.uname().sysname
+    log.debug("Generating CDROM ISO image for cloud-init user data: %s", iso_path)
+    if sysname == "Linux":
+        subprocess.check_call(
+            [
+                "mkisofs",
+                "-input-charset", "utf-8",
+                "-output", iso_path,
+                "-volid", "cidata",
+                "-joliet",
+                "-rock",
+                "-quiet",
+                "-graft-points",
+                user_data_path,
+                meta_data_path
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+    elif sysname == "Darwin":
+        subprocess.check_call(
+            [
+                "hdiutil",
+                "makehybrid",
+                "-iso",
+                "-joliet",
+                "-o", iso_path,
+                f"{cidatadir}"
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+    else:
+        raise NotImplementedError(f"Unsupported system '{sysname}' for generating cdrom iso")
+
+    return iso_path
+
+
+def start_vm_qemu(image, cloudinit_iso, portfwds_tcp=None, portfwds_udp=None):
+    """
+    Start an ephemeral VM in qemu, injecting configuration via cloud-init.
+    portfwds is a list of tuples of the form (host_port, guest_port).
+    """
+
+    port_forwards = ""
+    if portfwds_tcp:
+        for host_port, guest_port in portfwds_tcp:
+            port_forwards += f",hostfwd=tcp::{host_port}-:{guest_port}"
+    if portfwds_udp:
+        for host_port, guest_port in portfwds_udp:
+            port_forwards += f",hostfwd=udp::{host_port}-:{guest_port}"
+
+    cmd = [
+        "qemu-system-x86_64",
+        "-M", "accel=kvm",
+        "-m", "2048",
+        "-snapshot",
+        "-cpu", "host",
+        "-net", "nic,model=virtio",
+        "-net", f"user{port_forwards}",
+        "-cdrom", cloudinit_iso,
+        image
+    ]
+
+    log.debug("Starting VM in qemu: %s", " ".join(cmd))
+    subprocess.run(cmd, check=True, stdout=sys.stdout, stderr=sys.stderr)
+
+
+def get_parser():
+    """
+    Returns a parser for the command line arguments.
+    """
+    parser = argparse.ArgumentParser(
+        description="Starts an ephemeral virtual machine in qemu, injecting configuration via cloud-init.")
+    parser.add_argument(
+        "image",
+        help="An os image that can be booted by qemu and has cloud-init installed and enabled. No changes are made to this file."
+    )
+    parser.add_argument(
+        "--vm-ssh-port",
+        required=False,
+        default=22,
+        help="The port the VM's SSH server is listening on."
+    )
+    parser.add_argument(
+        "--local-ssh-port",
+        required=False,
+        default=2222,
+        help="The port on localhost the VM's SSH server is forwarded to."
+    )
+    parser.add_argument(
+        "--default-user",
+        required=False,
+        default="admin",
+        help="The default user to create using cloud-init if no user-data is provided."
+    )
+    parser.add_argument(
+        "--default-password",
+        required=False,
+        default="admin123",
+        help="The default user's password to create using cloud-init if no user-data is provided."
+    )
+    parser.add_argument(
+        "--ssh-key-file",
+        required=False,
+        default="~/.ssh/id_rsa.pub",
+        help="The ssh key file to add to the cloud-init user-data."
+    )
+    parser.add_argument(
+        "--debug",
+        required=False,
+        default=False,
+        action="store_true",
+        help="Enable debug logging."
+    )
+    return parser
+
+
+def main(args):
+    """
+    Main entrypoint.
+    """
+    if args.debug:
+        log.setLevel(logging.DEBUG)
+
+    with tempfile.TemporaryDirectory() as workdir:
+        userdata = create_default_ci_userdata(
+            workdir,
+            args.default_user,
+            args.default_password,
+            os.path.expanduser(args.ssh_key_file)
+        )
+        cloudinit_iso = prepare_cloud_init_cdrom(workdir, userdata)
+        log.info("Starting VM in qemu... (press Ctrl-C to stop it)")
+        log.info("Default user: %s", args.default_user)
+        log.info("Default password: %s", args.default_password)
+        log.info("SSH into the VM using: ssh -p %s %s@localhost", args.local_ssh_port, args.default_user)
+        start_vm_qemu(args.image, cloudinit_iso, portfwds_tcp=[(args.local_ssh_port, args.vm_ssh_port)])
+
+
+if __name__ == "__main__":
+    parser = get_parser()
+    args = parser.parse_args()
+    try:
+        main(args)
+    except KeyboardInterrupt:
+        pass

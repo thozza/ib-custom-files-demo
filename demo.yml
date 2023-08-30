@@ -1,0 +1,26 @@
+---
+- name: Play for configuring a demo host on first boot
+  hosts: all
+  become: true
+
+  tasks:
+    - name: Set timezone to Europe/Prague
+      community.general.timezone:
+        name: Europe/Prague
+
+    - name: Add demo2 user
+      ansible.builtin.user:
+        name: demo2
+        shell: /bin/bash
+        createhome: true
+        groups: wheel
+        append: true
+
+    - name: Install and configure dnf-automatic
+      ansible.builtin.import_role:
+        name: ansible-role-dnf-automatic
+      vars:
+        dnf_automatic_apply_updates: true
+        dnf_automatic_download_updates: true
+        dnf_automatic_upgrade_type: security
+        dnf_automatic_reboot: false

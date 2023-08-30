@@ -1,0 +1,4 @@
+---
+- src: https://github.com/exploide/ansible-role-dnf-automatic.git
+  scm: git
+  version: 3.1.0
